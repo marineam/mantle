@@ -49,7 +49,7 @@ func (t *test2) Test(h *H) { t.TestCalled = true }
 func TestRunGroup(t *testing.T) {
 	tc := &test2{TestCalled: false}
 	h := NewGroupHarness(tc, "test2.Test")
-	<-h.Start()
+	h.Run()
 	if h.Failed() || h.Skipped() || !tc.TestCalled {
 		t.Error("Running Group.Test failed")
 	}

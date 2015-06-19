@@ -22,13 +22,13 @@ import (
 
 func TestListRunner(t *testing.T) {
 	// test1 is defined in group_test.go
-	ts := &Serial{Tests: []interface{}{test1{}}}
+	ts := &Local{Tests: []interface{}{test1{}}}
 	expect := []string{"test1.TestFunc1"}
 	funcs := ts.List()
 	if diff := pretty.Compare(expect, funcs); diff != "" {
 		t.Errorf("List failed:\n%s", diff)
 	}
-	ts = &Serial{Tests: []interface{}{&test1{}}}
+	ts = &Local{Tests: []interface{}{&test1{}}}
 	expect = []string{"test1.TestFunc1", "test1.TestFunc2"}
 	funcs = ts.List()
 	if diff := pretty.Compare(expect, funcs); diff != "" {
@@ -39,8 +39,8 @@ func TestListRunner(t *testing.T) {
 func TestRunRunner(t *testing.T) {
 	// test2 is defined in group_test.go
 	tc := &test2{TestCalled: false}
-	ts := &Serial{Tests: []interface{}{tc}}
-	if err := ts.Run("*"); err != nil {
+	ts := &Local{Tests: []interface{}{tc}}
+	if err := ts.Run("*", 1); err != nil {
 		t.Errorf("Run failed: %v", err)
 	}
 	if !tc.TestCalled {

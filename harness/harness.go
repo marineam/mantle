@@ -31,7 +31,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/coreos/mantle/Godeps/_workspace/src/github.com/coreos/pkg/capnslog"
 )
+
+var plog = capnslog.NewPackageLogger("github.com/coreos/mantle", "harness")
 
 // Similar to testing.T
 type H struct {
@@ -213,16 +217,20 @@ func (h *H) Name() string {
 	return h.name
 }
 
-// Start launches the test in a new goroutine. When the test completes
-// the test harness will be passed back over the returned channel.
-func (h *H) Start() <-chan *H {
-	fmt.Printf("=== RUN   %s\n", h.name)
-	signal := make(chan *H)
+// Run launches the test in a new goroutine and waits for it to complete.
+func (h *H) Run() {
+	if h.Failed() || h.Skipped() {
+		h.report()
+		return
+	}
+	plog.Noticef("=== RUN   %s", h.name)
+	signal := make(chan struct{})
 	go h.run(signal)
-	return signal
+	<-signal
+	h.report()
 }
 
-func (h *H) run(signal chan<- *H) {
+func (h *H) run(signal chan<- struct{}) {
 	// When this goroutine is done, either because h.test(h)
 	// returned normally or because a test failure triggered
 	// a call to runtime.Goexit, record the duration and send
@@ -239,7 +247,7 @@ func (h *H) run(signal chan<- *H) {
 			h.report()
 			panic(err)
 		}
-		signal <- h
+		close(signal)
 	}()
 
 	h.start = time.Now()
@@ -256,6 +264,7 @@ func (h *H) report() {
 	} else {
 		state = "PASS"
 	}
-	fmt.Printf("--- %s: %s (%.2fs)\n%s",
-		state, h.name, h.duration.Seconds(), h.output)
+	//d := (h.duration / time.Millisecond) * time.Millisecond
+	d := h.duration
+	plog.Noticef("--- %s: %s (%s)\n%s", state, h.name, d, h.output)
 }

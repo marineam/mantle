@@ -16,26 +16,30 @@ package harness
 
 import (
 	"errors"
-	"fmt"
 	"path/filepath"
 	"sort"
+	"sync"
 )
 
 var RunnerFailed = errors.New("Failure while running tests!")
 
+/*
 type Runner interface {
 	List() []string
 	Run(match string) error
+}*/
+
+type Local struct {
+	Tests []interface{}
+
+	parallel chan struct{}  // Limits number of concurrent tests.
+	pending  sync.WaitGroup // Wait outstanding tests.
+	failed   int
+	passed   int
+	skipped  int
 }
 
-type Serial struct {
-	Tests   []interface{}
-	failed  int
-	passed  int
-	skipped int
-}
-
-func (s *Serial) List() []string {
+func (s *Local) List() []string {
 	tests := make([]string, 0, len(s.Tests))
 	for _, value := range s.Tests {
 		switch t := value.(type) {
@@ -51,21 +55,24 @@ func (s *Serial) List() []string {
 	return tests
 }
 
-func (s *Serial) Run(match string) error {
+func (s *Local) Run(match string, parallel int) error {
+	s.parallel = make(chan struct{}, parallel)
 	for _, value := range s.Tests {
+		s.pending.Add(1)
 		switch t := value.(type) {
 		case Group:
-			s.runGroup(t, match)
+			go s.runGroup(t, match)
 		case TestFunc:
-			s.runTestFunc(t, match)
+			go s.runTestFunc(t, match)
 		default:
 			panic("Unexpected test type")
 		}
 	}
 
-	fmt.Printf("FAILED:  %d\n", s.failed)
-	fmt.Printf("PASSED:  %d\n", s.passed)
-	fmt.Printf("SKIPPED: %d\n", s.skipped)
+	s.pending.Wait()
+	plog.Noticef("FAILED:  %d", s.failed)
+	plog.Noticef("PASSED:  %d", s.passed)
+	plog.Noticef("SKIPPED: %d", s.skipped)
 
 	if s.failed != 0 {
 		return RunnerFailed
@@ -73,7 +80,9 @@ func (s *Serial) Run(match string) error {
 	return nil
 }
 
-func (s *Serial) runGroup(tc Group, match string) {
+func (s *Local) runGroup(tc Group, match string) {
+	defer s.pending.Done()
+
 	names := ListGroup(tc)
 	tests := make([]*H, 0, len(names))
 	for _, name := range names {
@@ -86,16 +95,15 @@ func (s *Serial) runGroup(tc Group, match string) {
 		return
 	}
 
+	s.parallel <- struct{}{}
+	defer func() { <-s.parallel }()
+
 	prepare := NewGroupHarness(tc, "Prepare")
-	<-prepare.Start()
-	prepare.report()
+	prepare.Run()
 
 	if !prepare.Failed() && !prepare.Skipped() {
 		cleanup := NewGroupHarness(tc, "Cleanup")
-		defer func() {
-			<-cleanup.Start()
-			cleanup.report()
-		}()
+		defer cleanup.Run()
 	}
 
 	for _, test := range tests {
@@ -103,31 +111,37 @@ func (s *Serial) runGroup(tc Group, match string) {
 			test.Fail()
 		} else if prepare.Skipped() {
 			test.Skip()
-		} else {
-			<-test.Start()
 		}
-		s.report(test)
+
+		test.Run()
+		if test.Failed() {
+			s.failed++
+		} else if test.Skipped() {
+			s.skipped++
+		} else {
+			s.passed++
+		}
 	}
 }
 
-func (s *Serial) runTestFunc(tf TestFunc, match string) {
+func (s *Local) runTestFunc(tf TestFunc, match string) {
+	defer s.pending.Done()
+
 	name := TestName(tf)
 	if ok, _ := filepath.Match(match, name); !ok {
 		return
 	}
 
-	test := NewTestFuncHarness(tf)
-	<-test.Start()
-	s.report(test)
-}
+	s.parallel <- struct{}{}
+	defer func() { <-s.parallel }()
 
-func (s *Serial) report(h *H) {
-	if h.Failed() {
+	test := NewTestFuncHarness(tf)
+	test.Run()
+	if test.Failed() {
 		s.failed++
-	} else if h.Skipped() {
+	} else if test.Skipped() {
 		s.skipped++
 	} else {
 		s.passed++
 	}
-	h.report()
 }
