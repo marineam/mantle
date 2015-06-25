@@ -49,6 +49,7 @@ type H struct {
 	duration time.Duration
 
 	name string   // Name of test.
+	tags []string // Tags describing the type of run, e.g. "short".
 	test TestFunc // Test function to execute.
 }
 
@@ -217,13 +218,30 @@ func (h *H) Name() string {
 	return h.name
 }
 
+// A string representing the tags describing this test run.
+func (h *H) Tags() string {
+	if len(h.tags) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("[%s]", strings.Join(h.tags, ","))
+}
+
+func (h *H) HasTag(tag string) bool {
+	for _, t := range h.tags {
+		if t == tag {
+			return true
+		}
+	}
+	return false
+}
+
 // Run launches the test in a new goroutine and waits for it to complete.
 func (h *H) Run() {
 	if h.Failed() || h.Skipped() {
 		h.report()
 		return
 	}
-	plog.Noticef("=== RUN   %s", h.name)
+	plog.Noticef("=== RUN   %s%s", h.name, h.Tags())
 	signal := make(chan struct{})
 	go h.run(signal)
 	<-signal
@@ -264,7 +282,6 @@ func (h *H) report() {
 	} else {
 		state = "PASS"
 	}
-	//d := (h.duration / time.Millisecond) * time.Millisecond
-	d := h.duration
-	plog.Noticef("--- %s: %s (%s)\n%s", state, h.name, d, h.output)
+	plog.Noticef("--- %s: %s%s (%.2f)\n%s",
+		state, h.name, h.Tags(), h.duration.Seconds(), h.output)
 }
