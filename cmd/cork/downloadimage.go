@@ -16,14 +16,15 @@ package main
 
 import (
 	"fmt"
-	"io/ioutil"
 	"net/http"
 	"net/url"
 	"path/filepath"
 	"strings"
 
 	"github.com/coreos/mantle/Godeps/_workspace/src/github.com/spf13/cobra"
-	"github.com/coreos/mantle/auth"
+	"github.com/coreos/mantle/Godeps/_workspace/src/golang.org/x/net/context"
+
+	"github.com/coreos/mantle/auth/google"
 	"github.com/coreos/mantle/sdk"
 )
 
@@ -37,7 +38,6 @@ var (
 	downloadImageRoot         string
 	downloadImageCacheDir     string
 	downloadImagePrefix       string
-	downloadImageJSONKeyFile  string
 	downloadImageVerify       bool
 	downloadImagePlatformList platformList
 )
@@ -49,12 +49,11 @@ func init() {
 		"cache-dir", filepath.Join(sdk.RepoCache(), "images"), "local dir for image cache")
 	downloadImageCmd.Flags().StringVar(&downloadImagePrefix,
 		"image-prefix", "coreos_production", "image filename prefix")
-	downloadImageCmd.Flags().StringVar(&downloadImageJSONKeyFile,
-		"json-key", "", "Google service account key for use with private buckets")
 	downloadImageCmd.Flags().BoolVar(&downloadImageVerify,
 		"verify", true, "verify")
 	downloadImageCmd.Flags().Var(&downloadImagePlatformList,
 		"platform", "Choose qemu, gce, or aws. Multiple platforms can be specified by repeating the flag")
+	downloadImageCmd.Flags().AddFlagSet(google.FlagSet)
 
 	root.AddCommand(downloadImageCmd)
 }
@@ -132,15 +131,7 @@ func runDownloadImage(cmd *cobra.Command, args []string) {
 	// support Google storage buckets URLs
 	var client *http.Client
 	if imageURL.Scheme == "gs" {
-		if downloadImageJSONKeyFile != "" {
-			b, err := ioutil.ReadFile(downloadImageJSONKeyFile)
-			if err != nil {
-				plog.Fatal(err)
-			}
-			client, err = auth.GoogleClientFromJSONKey(b, "https://www.googleapis.com/auth/devstorage.read_only")
-		} else {
-			client, err = auth.GoogleClient()
-		}
+		client, err = google.NewClient(context.TODO())
 		if err != nil {
 			plog.Fatal(err)
 		}
