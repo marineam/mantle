@@ -45,6 +45,7 @@ type Bucket struct {
 
 	writeAlways bool
 	writeDryRun bool
+	writeInsert bool
 }
 
 func NewBucket(client *http.Client, bucketURL string) (*Bucket, error) {
@@ -93,6 +94,11 @@ func (b *Bucket) WriteAlways(always bool) {
 // WriteDryRun blocks any changes, merely logging them instead.
 func (b *Bucket) WriteDryRun(dryrun bool) {
 	b.writeDryRun = dryrun
+}
+
+// WriteInsert blocks changing existing objects, failing instead.
+func (b *Bucket) WriteInsert(insert bool) {
+	b.writeInsert = insert
 }
 
 func (b *Bucket) Object(objName string) *storage.Object {
@@ -271,6 +277,9 @@ func (b *Bucket) Upload(ctx context.Context, obj *storage.Object, media io.Reade
 	if !b.writeAlways && crcEq(old, obj) {
 		return nil // up to date!
 	}
+	if b.writeInsert && old != nil {
+		return fmt.Errorf("refusing to overwrite %s", b.mkURL(old))
+	}
 	if b.writeDryRun {
 		plog.Noticef("Would write %s", b.mkURL(obj))
 		return nil
@@ -308,6 +317,9 @@ func (b *Bucket) Copy(ctx context.Context, src *storage.Object, dstName string) 
 	old := b.Object(dstName)
 	if !b.writeAlways && crcEq(old, src) {
 		return nil // up to date!
+	}
+	if b.writeInsert && old != nil {
+		return fmt.Errorf("refusing to overwrite %s", b.mkURL(old))
 	}
 
 	// It does work to pass src directly to the Rewrite API call, the
@@ -363,6 +375,9 @@ func (b *Bucket) Delete(ctx context.Context, objName string) error {
 
 	// Watch out for unexpected conflicting updates.
 	if old := b.Object(objName); old != nil {
+		if b.writeInsert {
+			return fmt.Errorf("refusing to delete %s", b.mkURL(objName))
+		}
 		req.IfGenerationMatch(old.Generation)
 		req.IfMetagenerationMatch(old.Metageneration)
 	}
