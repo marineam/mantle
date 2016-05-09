@@ -285,6 +285,8 @@ func (b *Bucket) Upload(ctx context.Context, obj *storage.Object, media io.Reade
 	// Watch out for unexpected conflicting updates.
 	if old != nil {
 		req.IfGenerationMatch(old.Generation)
+	} else {
+		req.IfGenerationMatch(0)
 	}
 
 	plog.Noticef("Writing %s", b.mkURL(obj))
@@ -328,6 +330,8 @@ func (b *Bucket) Copy(ctx context.Context, src *storage.Object, dstName string) 
 	// Watch out for unexpected conflicting updates.
 	if old != nil {
 		req.IfGenerationMatch(old.Generation)
+	} else {
+		req.IfGenerationMatch(0)
 	}
 	if src.Generation != 0 {
 		req.IfSourceGenerationMatch(src.Generation)
