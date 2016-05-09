@@ -43,9 +43,7 @@ type Bucket struct {
 	prefixes map[string]struct{}
 	objects  map[string]*storage.Object
 
-	// writeAlways enables overwriting of objects that appear up-to-date
 	writeAlways bool
-	// writeDryRun blocks any changes, merely logging them instead
 	writeDryRun bool
 }
 
@@ -87,10 +85,12 @@ func (b *Bucket) URL() *url.URL {
 	return &url.URL{Scheme: "gs", Host: b.name, Path: b.prefix}
 }
 
+// WriteAlways enables overwriting of objects that appear up-to-date.
 func (b *Bucket) WriteAlways(always bool) {
 	b.writeAlways = always
 }
 
+// WriteDryRun blocks any changes, merely logging them instead.
 func (b *Bucket) WriteDryRun(dryrun bool) {
 	b.writeDryRun = dryrun
 }
