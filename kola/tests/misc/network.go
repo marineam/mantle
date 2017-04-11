@@ -20,7 +20,6 @@ import (
 
 	"github.com/coreos/mantle/kola/cluster"
 	"github.com/coreos/mantle/kola/register"
-	"github.com/coreos/mantle/platform"
 )
 
 func init() {
@@ -37,7 +36,9 @@ type listener struct {
 	port    string
 }
 
-func checkListeners(m platform.Machine, protocol string, filter string, listeners []listener) error {
+func checkListeners(c cluster.TestCluster, protocol string, filter string, listeners []listener) {
+	m := c.Machines()[0]
+
 	var command string
 	if filter != "" {
 		command = fmt.Sprintf("sudo lsof -i%v -s%v", protocol, filter)
@@ -46,7 +47,7 @@ func checkListeners(m platform.Machine, protocol string, filter string, listener
 	}
 	output, err := m.SSH(command)
 	if err != nil {
-		return fmt.Errorf("Failed to run %s: output %s, status: %v", command, output, err)
+		c.Fatalf("Failed to run %s: output %s, status: %v", command, output, err)
 	}
 
 	processes := strings.Split(string(output), "\n")
@@ -70,18 +71,15 @@ func checkListeners(m platform.Machine, protocol string, filter string, listener
 		if valid != true {
 			// systemd renames child processes in parentheses before closing their fds
 			if processname[0] == '(' {
-				plog.Infof("Ignoring %q listener process: %q (pid %s) on %q", protocol, processname, pid, port)
+				c.Logf("Ignoring %q listener process: %q (pid %s) on %q", protocol, processname, pid, port)
 			} else {
-				return fmt.Errorf("Unexpected %q listener process: %q (pid %s) on %q", protocol, processname, pid, port)
+				c.Fatalf("Unexpected %q listener process: %q (pid %s) on %q", protocol, processname, pid, port)
 			}
 		}
 	}
-	return nil
 }
 
-func NetworkListeners(c cluster.TestCluster) error {
-	m := c.Machines()[0]
-
+func NetworkListeners(c cluster.TestCluster) {
 	TCPListeners := []listener{
 		{"systemd", "ssh"},
 	}
@@ -89,14 +87,6 @@ func NetworkListeners(c cluster.TestCluster) error {
 		{"systemd-n", "dhcpv6-client"},
 		{"systemd-n", "bootpc"},
 	}
-	err := checkListeners(m, "TCP", "TCP:LISTEN", TCPListeners)
-	if err != nil {
-		return err
-	}
-	err = checkListeners(m, "UDP", "", UDPListeners)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	checkListeners(c, "TCP", "TCP:LISTEN", TCPListeners)
+	checkListeners(c, "UDP", "", UDPListeners)
 }

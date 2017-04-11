@@ -23,8 +23,6 @@ import (
 	"net"
 	"strings"
 
-	"github.com/coreos/pkg/capnslog"
-
 	"github.com/coreos/mantle/kola/cluster"
 	"github.com/coreos/mantle/kola/register"
 	"github.com/coreos/mantle/kola/tests/etcd"
@@ -32,7 +30,6 @@ import (
 )
 
 var (
-	plog        = capnslog.NewPackageLogger("github.com/coreos/mantle", "kola/tests/flannel")
 	flannelConf = `{
   "ignition": { "version": "2.0.0" },
   "systemd": {
@@ -42,7 +39,7 @@ var (
         "enable": true,
         "dropins": [{
           "name": "metadata.conf",
-          "contents": "[Unit]\nWants=coreos-metadata.service\nAfter=coreos-metadata.service\n\n[Service]\nEnvironmentFile=-/run/metadata/coreos\nExecStart=\nExecStart=/usr/bin/etcd2 --name=$name --discovery=$discovery --advertise-client-urls=http://$private_ipv4:2379 --initial-advertise-peer-urls=http://$private_ipv4:2380 --listen-client-urls=http://0.0.0.0:2379,http://0.0.0.0:4001 --listen-peer-urls=http://$private_ipv4:2380,http://$private_ipv4:7001"
+          "contents": "[Unit]\nWants=coreos-metadata.service\nAfter=coreos-metadata.service\n\n[Service]\nEnvironmentFile=-/run/metadata/coreos\nExecStart=\nExecStart=/usr/bin/etcd2 --discovery=$discovery --advertise-client-urls=http://$private_ipv4:2379 --initial-advertise-peer-urls=http://$private_ipv4:2380 --listen-client-urls=http://0.0.0.0:2379,http://0.0.0.0:4001 --listen-peer-urls=http://$private_ipv4:2380,http://$private_ipv4:7001"
         }]
       },
       {
@@ -111,54 +108,52 @@ func mach2bip(m platform.Machine, ifname string) (string, error) {
 }
 
 // ping sends icmp packets from machine a to b using the ping tool.
-func ping(a, b platform.Machine, ifname string) error {
+func ping(c cluster.TestCluster, a, b platform.Machine, ifname string) {
 	srcip, err := mach2bip(a, ifname)
 	if err != nil {
-		return fmt.Errorf("failed to get docker bridge ip #1: %v", err)
+		c.Fatalf("failed to get docker bridge ip #1: %v", err)
 	}
 
 	dstip, err := mach2bip(b, ifname)
 	if err != nil {
-		return fmt.Errorf("failed to get docker bridge ip #2: %v", err)
+		c.Fatalf("failed to get docker bridge ip #2: %v", err)
 	}
 
 	// ensure the docker bridges have the right network
 	_, ipnet, _ := net.ParseCIDR("10.254.0.0/16")
 	if !ipnet.Contains(net.ParseIP(srcip)) || !ipnet.Contains(net.ParseIP(dstip)) {
-		return fmt.Errorf("bridge ips (%s %s) not in flannel network (%s)", srcip, dstip, ipnet)
+		c.Fatalf("bridge ips (%s %s) not in flannel network (%s)", srcip, dstip, ipnet)
 	}
 
-	plog.Infof("ping from %s(%s) to %s(%s)", a.ID(), srcip, b.ID(), dstip)
+	c.Logf("ping from %s(%s) to %s(%s)", a.ID(), srcip, b.ID(), dstip)
 
 	cmd := fmt.Sprintf("ping -c 10 -I %s %s", srcip, dstip)
 	out, err := a.SSH(cmd)
 	if err != nil {
-		return fmt.Errorf("ping from %s to %s failed: %s: %v", a.ID(), b.ID(), out, err)
+		c.Fatalf("ping from %s to %s failed: %s: %v", a.ID(), b.ID(), out, err)
 	}
-
-	return nil
 }
 
 // UDP tests that flannel can send packets using the udp backend.
-func udp(c cluster.TestCluster) error {
+func udp(c cluster.TestCluster) {
 	machs := c.Machines()
 
 	// Wait for all etcd cluster nodes to be ready.
 	if err := etcd.GetClusterHealth(machs[0], len(machs)); err != nil {
-		return fmt.Errorf("cluster health: %v", err)
+		c.Fatalf("cluster health: %v", err)
 	}
 
-	return ping(machs[0], machs[2], "flannel0")
+	ping(c, machs[0], machs[2], "flannel0")
 }
 
 // VXLAN tests that flannel can send packets using the vxlan backend.
-func vxlan(c cluster.TestCluster) error {
+func vxlan(c cluster.TestCluster) {
 	machs := c.Machines()
 
 	// Wait for all etcd cluster nodes to be ready.
 	if err := etcd.GetClusterHealth(machs[0], len(machs)); err != nil {
-		return fmt.Errorf("cluster health: %v", err)
+		c.Fatalf("cluster health: %v", err)
 	}
 
-	return ping(machs[0], machs[2], "flannel.1")
+	ping(c, machs[0], machs[2], "flannel.1")
 }

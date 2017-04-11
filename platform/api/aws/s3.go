@@ -17,7 +17,6 @@ package aws
 import (
 	"fmt"
 	"io"
-	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
@@ -36,13 +35,16 @@ const (
 	alreadyExistsErr = "BucketAlreadyOwnedByYou"
 )
 
-// UploadObject uploads an object to S3
-func (a *API) UploadObject(r io.Reader, bucket, path string, expire bool, force bool) error {
-	s3uploader := s3manager.NewUploaderWithClient(a.s3)
-	var expireTime *time.Time
-	if expire {
-		expireTime = aws.Time(time.Now().Add(10 * 24 * time.Hour))
+func s3IsNotFound(err error) bool {
+	if awserr, ok := err.(awserr.Error); ok {
+		return awserr.Code() == documentedNotFoundErr || awserr.Code() == actualNotFoundErr
 	}
+	return false
+}
+
+// UploadObject uploads an object to S3
+func (a *API) UploadObject(r io.Reader, bucket, path string, force bool) error {
+	s3uploader := s3manager.NewUploaderWithClient(a.s3)
 
 	if !force {
 		_, err := a.s3.HeadObject(&s3.HeadObjectInput{
@@ -50,28 +52,34 @@ func (a *API) UploadObject(r io.Reader, bucket, path string, expire bool, force 
 			Key:    &path,
 		})
 		if err != nil {
-			if awserr, ok := err.(awserr.Error); ok {
-				if awserr.Code() != documentedNotFoundErr && awserr.Code() != actualNotFoundErr {
-					return fmt.Errorf("unable to head object %v/%v: %v, %v", bucket, path, awserr.Code(), awserr.Message())
-				}
-			} else {
-				return fmt.Errorf("unexpected error heading object s3://%v/%v: %v", bucket, path, err)
+			if !s3IsNotFound(err) {
+				return fmt.Errorf("unable to head object %v/%v: %v", bucket, path, err)
 			}
 		} else {
-			// TODO, maybe we should bump expiration here
 			plog.Infof("skipping upload since force was not set: s3://%v/%v", bucket, path)
 			return nil
 		}
 	}
 
 	_, err := s3uploader.Upload(&s3manager.UploadInput{
-		Body:    r,
-		Bucket:  aws.String(bucket),
-		Key:     aws.String(path),
-		Expires: expireTime,
+		Body:   r,
+		Bucket: aws.String(bucket),
+		Key:    aws.String(path),
 	})
 	if err != nil {
 		return fmt.Errorf("error uploading s3://%v/%v: %v", bucket, path, err)
+	}
+	return err
+}
+
+func (a *API) DeleteObject(bucket, path string) error {
+	plog.Infof("deleting s3://%v/%v", bucket, path)
+	_, err := a.s3.DeleteObject(&s3.DeleteObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(path),
+	})
+	if err != nil {
+		return fmt.Errorf("error deleting s3://%v/%v: %v", bucket, path, err)
 	}
 	return err
 }

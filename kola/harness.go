@@ -19,7 +19,6 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -75,6 +74,19 @@ func filterTests(tests map[string]*register.Test, pattern, platform string, vers
 		allowed := true
 		for _, p := range t.Platforms {
 			if p == platform {
+				allowed = true
+				break
+			} else {
+				allowed = false
+			}
+		}
+		if !allowed {
+			continue
+		}
+
+		arch := architecture(platform)
+		for _, a := range t.Architectures {
+			if a == arch {
 				allowed = true
 				break
 			} else {
@@ -160,18 +172,7 @@ func RunTests(pattern, pltfrm, outputDir string) error {
 	for _, test := range tests {
 		test := test // for the closure
 		run := func(h *harness.H) {
-			h.Parallel()
-
-			// don't go too fast, in case we're talking to a rate limiting api like AWS EC2.
-			// FIXME(marineam): API requests must do their own
-			// backoff due to rate limiting, this is unreliable.
-			max := int64(2 * time.Second)
-			splay := time.Duration(rand.Int63n(max))
-			time.Sleep(splay)
-
-			if err := runTest(h, test, pltfrm); err != nil {
-				h.Error(err)
-			}
+			runTest(h, test, pltfrm)
 		}
 		htests.Add(test.Name, run)
 	}
@@ -247,8 +248,18 @@ func getClusterSemver(pltfrm, outputDir string) (*semver.Version, error) {
 // runTest is a harness for running a single test.
 // outputDir is where various test logs and data will be written for
 // analysis after the test run. It should already exist.
-func runTest(h *harness.H, t *register.Test, pltfrm string) (err error) {
+func runTest(h *harness.H, t *register.Test, pltfrm string) {
+	h.Parallel()
+
+	// don't go too fast, in case we're talking to a rate limiting api like AWS EC2.
+	// FIXME(marineam): API requests must do their own
+	// backoff due to rate limiting, this is unreliable.
+	max := int64(2 * time.Second)
+	splay := time.Duration(rand.Int63n(max))
+	time.Sleep(splay)
+
 	var c platform.Cluster
+	var err error
 
 	testDir := h.OutputDir()
 	switch pltfrm {
@@ -263,7 +274,7 @@ func runTest(h *harness.H, t *register.Test, pltfrm string) (err error) {
 	}
 
 	if err != nil {
-		return fmt.Errorf("Cluster failed: %v", err)
+		h.Fatalf("Cluster failed: %v", err)
 	}
 	defer func() {
 		if err := c.Destroy(); err != nil {
@@ -271,17 +282,15 @@ func runTest(h *harness.H, t *register.Test, pltfrm string) (err error) {
 		}
 	}()
 
-	url, err := c.GetDiscoveryURL(t.ClusterSize)
-	if err != nil {
-		return fmt.Errorf("Failed to create discovery endpoint: %v", err)
-	}
-
-	cfgs := MakeConfigs(url, t.UserData, t.ClusterSize)
-
 	if t.ClusterSize > 0 {
-		_, err := platform.NewMachines(c, cfgs)
+		url, err := c.GetDiscoveryURL(t.ClusterSize)
 		if err != nil {
-			return fmt.Errorf("Cluster failed starting machines: %v", err)
+			h.Fatalf("Failed to create discovery endpoint: %v", err)
+		}
+
+		cfg := strings.Replace(t.UserData, "$discovery", url, -1)
+		if _, err := platform.NewMachines(c, cfg, t.ClusterSize); err != nil {
+			h.Fatalf("Cluster failed starting machines: %v", err)
 		}
 	}
 
@@ -300,28 +309,10 @@ func runTest(h *harness.H, t *register.Test, pltfrm string) (err error) {
 
 	// drop kolet binary on machines
 	if t.NativeFuncs != nil {
-		nativeArch := "amd64"
-		if pltfrm == "qemu" && QEMUOptions.Board != "" {
-			nativeArch = strings.SplitN(QEMUOptions.Board, "-", 2)[0]
-		}
-
-		err = scpKolet(tcluster, nativeArch)
-		if err != nil {
-			return fmt.Errorf("dropping kolet binary: %v", err)
-		}
+		scpKolet(tcluster, architecture(pltfrm))
 	}
 
 	defer func() {
-		r := recover()
-		switch r := r.(type) {
-		case nil:
-			// no-op
-		case error:
-			err = r
-		default:
-			err = fmt.Errorf("test panicked: %v", r)
-		}
-
 		// give some time for the remote journal to be flushed so it can be read
 		// before we run the deferred machine destruction
 		if err != nil {
@@ -330,11 +321,20 @@ func runTest(h *harness.H, t *register.Test, pltfrm string) (err error) {
 	}()
 
 	// run test
-	return t.Run(tcluster)
+	t.Run(tcluster)
+}
+
+// architecture returns the machine architecture of the given platform.
+func architecture(pltfrm string) string {
+	nativeArch := "amd64"
+	if pltfrm == "qemu" && QEMUOptions.Board != "" {
+		nativeArch = strings.SplitN(QEMUOptions.Board, "-", 2)[0]
+	}
+	return nativeArch
 }
 
 // scpKolet searches for a kolet binary and copies it to the machine.
-func scpKolet(t cluster.TestCluster, mArch string) error {
+func scpKolet(c cluster.TestCluster, mArch string) {
 	for _, d := range []string{
 		".",
 		filepath.Dir(os.Args[0]),
@@ -343,22 +343,13 @@ func scpKolet(t cluster.TestCluster, mArch string) error {
 	} {
 		kolet := filepath.Join(d, "kolet")
 		if _, err := os.Stat(kolet); err == nil {
-			return t.DropFile(kolet)
+			if err := c.DropFile(kolet); err != nil {
+				c.Fatalf("dropping kolet binary: %v", err)
+			}
+			return
 		}
 	}
-	return fmt.Errorf("Unable to locate kolet binary for %s", mArch)
-}
-
-// replaces $discovery with discover url in etcd cloud config and
-// replaces $name with a unique name
-func MakeConfigs(url, cfg string, csize int) []string {
-	cfg = strings.Replace(cfg, "$discovery", url, -1)
-
-	var cfgs []string
-	for i := 0; i < csize; i++ {
-		cfgs = append(cfgs, strings.Replace(cfg, "$name", "instance"+strconv.Itoa(i), -1))
-	}
-	return cfgs
+	c.Fatalf("Unable to locate kolet binary for %s", mArch)
 }
 
 // CleanOutputDir creates an empty directory, any existing data will be wiped!
